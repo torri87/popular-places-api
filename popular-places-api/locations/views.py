@@ -1,6 +1,9 @@
+import pandas
 from django.core.cache import cache
+from django.http import HttpResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
@@ -18,6 +21,23 @@ from .serializers import CategorySerializer, LocationSerializer
 
 
 VIEW_COOLDOWN_SECONDS = 60 * 60
+
+EXPORT_COLUMNS = [
+    "id",
+    "title",
+    "description",
+    "category",
+    "address",
+    "latitude",
+    "longitude",
+    "author",
+    "avg_rating",
+    "reviews_count",
+    "views_7d",
+    "popularity",
+    "created_at",
+    "updated_at",
+]
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all()
@@ -37,6 +57,51 @@ class LocationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = Location.objects.select_related("category", "author")
         return annotate_location_stats(queryset)
+
+    def _build_export_dataframe(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        rows = [
+            {
+                "id": loc.id,
+                "title": loc.title,
+                "description": loc.description,
+                "category": loc.category.name if loc.category_id else None,
+                "address": loc.address,
+                "latitude": float(loc.latitude),
+                "longitude": float(loc.longitude),
+                "author": loc.author.username if loc.author_id else None,
+                "avg_rating": (
+                    round(loc.avg_rating, 2)
+                    if getattr(loc, "avg_rating", None) is not None
+                    else None
+                ),
+                "reviews_count": getattr(loc, "reviews_count", 0),
+                "views_7d": getattr(loc, "views_7d", 0),
+                "popularity": round(getattr(loc, "popularity", 0.0), 2),
+                "created_at": loc.created_at.isoformat() if loc.created_at else None,
+                "updated_at": loc.updated_at.isoformat() if loc.updated_at else None,
+            }
+            for loc in queryset
+        ]
+        return pandas.DataFrame(rows, columns=EXPORT_COLUMNS)
+
+    @action(detail=False, methods=["get"], url_path="export/csv")
+    def export_csv(self, request):
+        df = self._build_export_dataframe(request)
+        csv_content = df.to_csv(index=False)
+        response = HttpResponse(csv_content, content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = 'attachment; filename="locations.csv"'
+        return response
+
+    @action(detail=False, methods=["get"], url_path="export/json")
+    def export_json(self, request):
+        df = self._build_export_dataframe(request)
+        json_content = df.to_json(orient="records", force_ascii=False, indent=2)
+        response = HttpResponse(
+            json_content, content_type="application/json; charset=utf-8"
+        )
+        response["Content-Disposition"] = 'attachment; filename="locations.json"'
+        return response
 
     def list(self, request, *args, **kwargs):
         cache_key = build_locations_list_cache_key(request)
