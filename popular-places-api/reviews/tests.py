@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from locations.models import Category, Location
-from reviews.models import Review
+from .models import Review, ReviewVote
 
 User = get_user_model()
 PASSWORD = 'PasS@!woaS$'
@@ -70,3 +70,51 @@ class ReviewTest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(Review.objects.count(), 2)
+
+class ReviewVoteTests(APITestCase):
+    def setUp(self):
+        self.place_author = User.objects.create_user("place_author", password=PASSWORD)
+        self.review_author = User.objects.create_user("review_author", password=PASSWORD)
+        self.voter = User.objects.create_user("voter", password=PASSWORD)
+        self.other = User.objects.create_user("other", password=PASSWORD)
+
+        category = Category.objects.create(name="Парк")
+        location = Location.objects.create(
+            title="Старий парк", description="Опис", category=category,
+            address="Луцьк", latitude="50.747233", longitude="25.325383",
+            author=self.place_author,
+        )
+        self.review = Review.objects.create(
+            location=location, author=self.review_author, rating=4, comment="Добре"
+        )
+        self.vote_url = reverse("review-vote", args=[self.review.pk])
+        self.detail_url = reverse("review-detail", args=[self.review.pk])
+
+    def test_user_can_like(self):
+        self.client.force_authenticate(self.voter)
+        response = self.client.post(self.vote_url, {"value": 1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["likes_count"], 1)
+        self.assertEqual(response.data["dislikes_count"], 0)
+
+    def test_user_can_dislike(self):
+        self.client.force_authenticate(self.voter)
+        response = self.client.post(self.vote_url, {"value": -1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["dislikes_count"], 1)
+
+    def test_second_vote_is_rejected(self):
+        self.client.force_authenticate(self.voter)
+        self.client.post(self.vote_url, {"value": 1}, format="json")
+        response = self.client.post(self.vote_url, {"value": -1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(ReviewVote.objects.count(), 1)
+
+    def test_anonymous_cannot_vote(self):
+        response = self.client.post(self.vote_url, {"value": 1}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_invalid_value_is_rejected(self):
+        self.client.force_authenticate(self.voter)
+        response = self.client.post(self.vote_url, {"value": 5}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
