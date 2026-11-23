@@ -5,6 +5,11 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 
+from .cache_utils import (
+    LOCATIONS_LIST_TTL,
+    build_locations_list_cache_key,
+    bump_locations_cache_version,
+)
 from .filters import LocationFilter
 from .models import Category, Location, LocationView
 from .permissions import IsAdminOrReadOnly, IsOwnerOrAdminOrReadOnly
@@ -33,8 +38,27 @@ class LocationViewSet(viewsets.ModelViewSet):
         queryset = Location.objects.select_related("category", "author")
         return annotate_location_stats(queryset)
 
+    def list(self, request, *args, **kwargs):
+        cache_key = build_locations_list_cache_key(request)
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return Response(cached_data)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, timeout=LOCATIONS_LIST_TTL)
+        return response
+
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
+        bump_locations_cache_version()
+
+    def perform_update(self, serializer):
+        serializer.save()
+        bump_locations_cache_version()
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        bump_locations_cache_version()
 
     @staticmethod
     def _viewer_id(request):
