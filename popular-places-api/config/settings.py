@@ -158,3 +158,10 @@ REST_FRAMEWORK = {
 }
 
 DEFAULT_FROM_EMAIL = 'noreply@popular-places.local'
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+    }
+}

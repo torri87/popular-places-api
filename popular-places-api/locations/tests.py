@@ -2,12 +2,22 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from reviews.models import Review
+from django.core.cache import cache
+from django.test import override_settings
 
-from .models import Category, Location
+from .models import Category, Location, LocationView
+from .queries import RATING_WEIGHT, REVIEWS_WEIGHT, VIEWS_WEIGHT
+
 
 User = get_user_model()
 
+LOCMEM_CACHE = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+}
 
+
+@override_settings(CACHES=LOCMEM_CACHE)
 class LocationAPITests(APITestCase):
     def setUp(self):
         self.owner = User.objects.create_user("owner", password="TeStpas2!!")
@@ -91,3 +101,73 @@ class LocationAPITests(APITestCase):
         self.assertTrue(
             Location.all_objects.filter(pk=self.location.pk, is_deleted=True).exists()
         )
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class LocationStatsTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.author = User.objects.create_user("author", password="TeStpas2!!")
+        self.u1 = User.objects.create_user("u1", password="TeStpas2!!")
+        self.u2 = User.objects.create_user("u2", password="TeStpas2!!")
+        category = Category.objects.create(name="Парк")
+        self.location = Location.objects.create(
+            title="Парк", description="Опис", category=category, address="Луцьк",
+            latitude="50.7", longitude="25.3", author=self.author,
+        )
+        self.url = reverse("location-detail", args=[self.location.pk])
+
+    def test_location_without_activity(self):
+        data = self.client.get(reverse("location-list")).data["results"][0]
+        self.assertIsNone(data["avg_rating"])
+        self.assertEqual(data["reviews_count"], 0)
+        self.assertEqual(data["views_7d"], 0)
+        self.assertEqual(data["popularity"], 0)
+
+
+@override_settings(CACHES=LOCMEM_CACHE)
+class LocationViewCountTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+        self.author = User.objects.create_user("author", password="TeStpas2!!")
+        self.u1 = User.objects.create_user("u1", password="TeStpas2!!")
+        self.u2 = User.objects.create_user("u2", password="TeStpas2!!")
+        category = Category.objects.create(name="Парк")
+        self.location = Location.objects.create(
+            title="Парк", description="Опис", category=category, address="Луцьк",
+            latitude="50.7", longitude="25.3", author=self.author,
+        )
+        self.url = reverse("location-detail", args=[self.location.pk])
+
+    def views(self):
+        return LocationView.objects.filter(location=self.location).count()
+
+    def test_detail_increments_views(self):
+        self.client.force_authenticate(self.u1)
+        response = self.client.get(self.url)
+        self.assertEqual(self.views(), 1)
+        self.assertEqual(response.data["views_7d"], 1)
+
+    def test_same_user_counts_once_per_hour(self):
+        self.client.force_authenticate(self.u1)
+        for _ in range(3):
+            self.client.get(self.url)
+        self.assertEqual(self.views(), 1)
+
+    def test_different_users_each_count(self):
+        for user in (self.u1, self.u2):
+            self.client.force_authenticate(user)
+            self.client.get(self.url)
+        self.assertEqual(self.views(), 2)
+
+    def test_anonymous_counts_once_per_ip(self):
+        self.client.get(self.url)
+        self.client.get(self.url)
+        self.assertEqual(self.views(), 1)
+
+    def test_view_counts_again_after_cooldown(self):
+        self.client.force_authenticate(self.u1)
+        self.client.get(self.url)
+        cache.clear()
+        self.client.get(self.url)
+        self.assertEqual(self.views(), 2)

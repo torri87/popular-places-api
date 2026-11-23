@@ -51,3 +51,8 @@ class Location(models.Model):
         self.is_deleted = True
         self.deleted_at = timezone.now()
         self.save(update_fields=['is_deleted', 'deleted_at'])
+
+
+class LocationView(models.Model):
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='views')
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
