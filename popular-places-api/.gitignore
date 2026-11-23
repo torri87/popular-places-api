@@ -3,4 +3,4 @@ __pycache__/
 *.pyc
 .venv/
 db.sqlite3
-.idea
+.idea/
