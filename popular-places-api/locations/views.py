@@ -1,11 +1,15 @@
-from rest_framework import viewsets
 from django.core.cache import cache
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import viewsets
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
+
+from .filters import LocationFilter
 from .models import Category, Location, LocationView
-from .serializers import CategorySerializer, LocationSerializer
 from .permissions import IsAdminOrReadOnly, IsOwnerOrAdminOrReadOnly
 from .queries import annotate_location_stats
+from .serializers import CategorySerializer, LocationSerializer
 
 
 VIEW_COOLDOWN_SECONDS = 60 * 60
@@ -19,6 +23,11 @@ class CategoryViewSet(viewsets.ModelViewSet):
 class LocationViewSet(viewsets.ModelViewSet):
     serializer_class = LocationSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrAdminOrReadOnly]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = LocationFilter
+    search_fields = ["title", "description"]
+    ordering_fields = ["created_at", "avg_rating", "popularity"]
+    ordering = ["-created_at"]
 
     def get_queryset(self):
         queryset = Location.objects.select_related("category", "author")
